@@ -1,5 +1,7 @@
 using Magpie.Properties;
 using System;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
@@ -34,6 +36,7 @@ namespace Magpie {
 			public volatile int frameRateOrLogLevel;
 			public volatile float cursorZoomFactor;
 			public volatile uint cursorInterpolationMode;
+			public volatile uint adapterIdx;
 			public volatile uint flags;
 			public volatile MagWindowCmd cmd = MagWindowCmd.Run;
 		}
@@ -47,7 +50,8 @@ namespace Magpie {
 			BreakpointMode = 0x20,
 			DisableWindowResizing = 0x40,
 			DisableDirectFlip = 0x80,
-			ConfineCursorIn3DGames = 0x100
+			ConfineCursorIn3DGames = 0x100,
+			CropTitleBarOfUWP = 0x200
 		}
 
 		private readonly MagWindowParams magWindowParams = new();
@@ -75,8 +79,24 @@ namespace Magpie {
 				bool initSuccess = false;
 				try {
 					initSuccess = NativeMethods.Initialize(ResolveLogLevel(Settings.Default.LoggingLevel));
-					if (!initSuccess) {
-						Logger.Error("Initialize 失败");
+				} catch (DllNotFoundException e) {
+					// 解决某些 DllImport 失败的问题
+					Logger.Warn(e, "未找到 Runtime.dll，尝试设置 Dll 文件的查找路径");
+
+					Logger.Info(Directory.GetCurrentDirectory());
+					if (!NativeMethods.SetDllDirectory(Directory.GetCurrentDirectory())) {
+						Logger.Warn($"SetDllDirectory 失败\n\tLastErrorCode={Marshal.GetLastWin32Error()}");
+					}
+					// 显式加载 Runtime.dll，而不是通过 DllImport
+					if (NativeMethods.LoadLibrary("Runtime.dll") == IntPtr.Zero) {
+						Logger.Warn($"LoadLibrary 失败\n\tLastErrorCode={Marshal.GetLastWin32Error()}");
+					}
+
+					// 再次尝试
+					try {
+						initSuccess = NativeMethods.Initialize(ResolveLogLevel(Settings.Default.LoggingLevel));
+					} catch (Exception e1) {
+						Logger.Error(e1, "Initialize 失败");
 					}
 				} catch (Exception e) {
 					Logger.Error(e, "Initialize 失败");
@@ -84,6 +104,7 @@ namespace Magpie {
 
 				if (!initSuccess) {
 					// 初始化失败
+					Logger.Fatal("初始化 Runtime 失败");
 					CloseEvent?.Invoke("Msg_Error_Init");
 					parent.Dispatcher.Invoke(() => {
 						parent.Close();
@@ -108,6 +129,7 @@ namespace Magpie {
 							magWindowParams.frameRateOrLogLevel,
 							magWindowParams.cursorZoomFactor,
 							magWindowParams.cursorInterpolationMode,
+							magWindowParams.adapterIdx,
 							magWindowParams.flags
 						);
 
@@ -148,6 +170,7 @@ namespace Magpie {
 			int frameRate,
 			float cursorZoomFactor,
 			uint cursorInterpolationMode,
+			uint adapterIdx,
 			bool showFPS,
 			bool noCursor,
 			bool adjustCursorSpeed,
@@ -156,7 +179,8 @@ namespace Magpie {
 			bool disableLowLatency,
 			bool breakpointMode,
 			bool disableDirectFlip,
-			bool confineCursorIn3DGames
+			bool confineCursorIn3DGames,
+			bool cropTitleBarOfUWP
 		) {
 			if (Running) {
 				Logger.Info("已存在全屏窗口，取消进入全屏");
@@ -181,6 +205,7 @@ namespace Magpie {
 			magWindowParams.frameRateOrLogLevel = frameRate;
 			magWindowParams.cursorZoomFactor = cursorZoomFactor;
 			magWindowParams.cursorInterpolationMode = cursorInterpolationMode;
+			magWindowParams.adapterIdx = adapterIdx;
 			magWindowParams.flags = (showFPS ? (uint)FlagMasks.ShowFPS : 0) |
 				(noCursor ? (uint)FlagMasks.NoCursor : 0) |
 				(adjustCursorSpeed ? (uint)FlagMasks.AdjustCursorSpeed : 0) |
@@ -189,7 +214,8 @@ namespace Magpie {
 				(breakpointMode ? (uint)FlagMasks.BreakpointMode : 0) |
 				(disableWindowResizing ? (uint)FlagMasks.DisableWindowResizing : 0) |
 				(disableDirectFlip ? (uint)FlagMasks.DisableDirectFlip : 0) |
-				(confineCursorIn3DGames ? (uint)FlagMasks.ConfineCursorIn3DGames : 0);
+				(confineCursorIn3DGames ? (uint)FlagMasks.ConfineCursorIn3DGames : 0) |
+				(cropTitleBarOfUWP ? (uint)FlagMasks.CropTitleBarOfUWP : 0);
 
 			_ = runEvent.Set();
 			Running = true;

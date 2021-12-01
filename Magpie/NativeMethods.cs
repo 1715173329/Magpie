@@ -2,6 +2,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
+
 namespace Magpie {
 	internal class NativeMethods {
 		public static readonly int MAGPIE_WM_SHOWME = RegisterWindowMessage("WM_SHOWME");
@@ -97,40 +98,6 @@ namespace Magpie {
 			return len > 0 ? sb.ToString() : "";
 		}
 
-		[StructLayout(LayoutKind.Sequential)]
-		private struct OsVersionInfo {
-			public uint dwOSVersionInfoSize;
-
-			public uint dwMajorVersion;
-			public uint dwMinorVersion;
-
-			public uint dwBuildNumber;
-
-			public uint dwPlatformId;
-
-			[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-			public string szCSDVersion;
-		}
-
-		[DllImport("ntdll.dll", SetLastError = true)]
-		private static extern uint RtlGetVersion(ref OsVersionInfo versionInformation);
-
-		private static Version? version = null;
-		public static Version GetOSVersion() {
-			if (version == null) {
-				OsVersionInfo osVersionInfo = new();
-				osVersionInfo.dwOSVersionInfoSize = (uint)Marshal.SizeOf(osVersionInfo);
-				_ = RtlGetVersion(ref osVersionInfo);
-				version = new Version(
-					(int)osVersionInfo.dwMajorVersion,
-					(int)osVersionInfo.dwMinorVersion,
-					(int)osVersionInfo.dwBuildNumber
-				);
-			}
-
-			return version;
-		}
-
 		private static readonly int LOCALE_NAME_MAX_LENGTH = 85;
 
 		[DllImport("kernel32.dll", SetLastError = true)]
@@ -154,6 +121,12 @@ namespace Magpie {
 		[DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
 		public static extern int RegQueryValueEx(IntPtr hKey, string lpValueName, IntPtr lpReserved, IntPtr lpType, byte[] lpData, ref int lpcbData);
 
+		[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+		public static extern bool SetDllDirectory(string lpPathName);
+
+		[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+		public static extern IntPtr LoadLibrary(string path);
+
 		/*
 		 * Runtime.dll
 		 */
@@ -165,16 +138,30 @@ namespace Magpie {
 		[DllImport("Runtime", CallingConvention = CallingConvention.StdCall)]
 		public static extern void SetLogLevel(uint logLevel);
 
-		[DllImport("Runtime", EntryPoint = "Run", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+		[DllImport("Runtime", EntryPoint = "Run", CallingConvention = CallingConvention.StdCall)]
 		private static extern IntPtr RunNative(
 			IntPtr hwndSrc,
-			[MarshalAs(UnmanagedType.LPStr)] string effectsJson,
+#pragma warning disable CA2101 // 指定对 P/Invoke 字符串参数进行封送处理
+			[MarshalAs(UnmanagedType.LPUTF8Str)] string effectsJson,
+#pragma warning restore CA2101 // 指定对 P/Invoke 字符串参数进行封送处理
 			uint captureMode,
 			int frameRate,
 			float cursorZoomFactor,
 			uint cursorInterpolationMode,
+			uint adapterIdx,
 			uint flags
 		);
+
+		[DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
+		private static extern int lstrlenA(IntPtr ptr);
+
+		private static unsafe string? PtrToUTF8String(IntPtr ptr) {
+			if (ptr == IntPtr.Zero) {
+				return null;
+			}
+			
+			return Encoding.UTF8.GetString((byte*)ptr, lstrlenA(ptr));
+		}
 
 		public static string? Run(
 			IntPtr hwndSrc,
@@ -183,10 +170,19 @@ namespace Magpie {
 			int frameRate,
 			float cursorZoomFactor,
 			uint cursorInterpolationMode,
+			uint adapterIdx,
 			uint flags
 		) {
-			IntPtr msg = RunNative(hwndSrc, effectsJson, captureMode, frameRate, cursorZoomFactor, cursorInterpolationMode, flags);
-			return Marshal.PtrToStringAnsi(msg);
+			return PtrToUTF8String(RunNative(hwndSrc, effectsJson, captureMode,
+				frameRate, cursorZoomFactor, cursorInterpolationMode, adapterIdx, flags));
+		}
+
+		[DllImport("Runtime", EntryPoint = "GetAllGraphicsAdapters", CallingConvention = CallingConvention.StdCall)]
+		private static extern IntPtr GetAllGraphicsAdaptersNative();
+
+		public static string[] GetAllGraphicsAdapters() {
+			string result = PtrToUTF8String(GetAllGraphicsAdaptersNative())!;
+			return result.Split(@"/$@\", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 		}
 	}
 }
